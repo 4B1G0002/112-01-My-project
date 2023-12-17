@@ -1,52 +1,358 @@
-1XX 水位標準為 高>1400 中>1100
-1XXa 水位標準為 高>900 中>500
---------------------------------------------------------------------------------------
-A1121214_DHT_water_sw420_LED_LCD_Rain_wifi_time_thing_112a
-1121217 修正：
-	OLED顯示問題已修正，驅動更換為 Adafruit_SH110X.h
+//112-01 微處理機應用實習 期末專案 4B1G0002 馮士釗
+//A1121214_DHT_water_sw420_LED_OLED_Rain_wifi_time_thingspeak_112a
+//1121207 基本功能全部完成，網頁可以顯示 溫度、濕度、水位、震動
+//108增加網頁顯示水位高、中、普通(>1400 >1100)
+//109增加網頁時間顯示
+//109a調整水位靈敏度(>900 >500)
+//110精簡部分程式碼
+//111增加雨滴感測器 ThingSpeak(更換:112-01期末_智慧遠程居家物聯網監控系統)
+//112增加 1.3吋 OLED 128*64，NTP時間
 
-1121217 添加：
-	OLED 水位 添加 正常、中、高，LOW、Medium、HIGH
-		   雨滴 添加 有雨、沒雨， Rain、No Rain
---------------------------------------------------------------------------------------
-A1121214_DHT_water_sw420_LED_LCD_Rain_wifi_time_thing_112a
-1121214 修改：
-	增加OLED 螢幕相容，顯示 時間、溫度、濕度、水位、雨滴、震動 等資訊
-	增加NTP時間
+#include <LiquidCrystal_I2C.h>  //I2C LCD
+#include "DHTesp.h"
+#include "ThingSpeak.h"
+//--------------------------------------------------------------------------------
+#include <SPI.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SH110X.h>
+#include "time.h"
+//--------------------------------------------------------------------------------
+#include <WebServer.h>
+#include <WiFiClient.h>
+#include <WiFi.h>
+const char* ssid = "DDAP";           // Change this to your WiFi SSID
+const char* password = "2023esp32";  // Change this to your WiFi password
+WebServer server(80);
+//--------------------------------------------------------------------------------
+LiquidCrystal_I2C lcd1(0x27, 16, 2);  //I2C LCD
+//--------------------------------------------------------------------------------
+const int DHT_PIN = 33;
+DHTesp dhtSensor;
+//--------------------------------------------------------------------------------
+int water_sensor = 36;  // 水位感測器Ｓ信號腳 連接到ESP32的 GPIO36
+//1700滿水位，1500 3/4，1400 1/2
+//--------------------------------------------------------------------------------
+int buzzPin = 14;  //設定蜂鳴器
+//--------------------------------------------------------------------------------
+int rled = 0;    // R 紅色LED控制腳 連接到ESP32的 GPIO15
+int yled = 4;    // Y 黃色LED控制腳 連接到ESP32的 GPIO16
+int gled = 16;   // G 綠色LED控制腳 連接到ESP32的 GPIO17
+int rled2 = 5;   // R 紅色LED控制腳 連接到ESP32的 GPIO15
+int yled2 = 18;  // Y 黃色LED控制腳 連接到ESP32的 GPIO16
+int gled2 = 19;  // G 綠色LED控制腳 連接到ESP32的 GPIO17
+//--------------------------------------------------------------------------------
+int shockPin = 26;  //SW-420震動感測器DO信號腳 連接到ESP32 GPIO17
+byte value;         //宣告value變數
+//--------------------------------------------------------------------------------
+int rainDI = 13;  //雨滴感測器模組 DO 連接 Arduino pin 4
+//int rainAI = 12;          //雨滴感測器模組 AO 連接 Arduino pin A0
+//--------------------------------------------------------------------------------
+// 設定OLED
+#define i2c_Address 0x3c // I2C 地址
+#define SCREEN_WIDTH 128 // 顯示器寬度
+#define SCREEN_HEIGHT 64 // 顯示器高度
+#define OLED_RESET -1   // 重置引腳，設為 -1 表示不使用
+Adafruit_SH1106G display = Adafruit_SH1106G(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+//--------------------------------------------------------------------------------
+const char* ntpServer = "pool.ntp.org";  //NTP Server網址
+const long gmtOffset_sec = 28800;        //台灣為GMT8小时·8hrs=28800sec
+const int daylightOffset_sec = 0;        //日光節時間為0
+bool OLEDStatus = true;
+//--------------------------------------------------------------------------------
+//ThingSpeak
+//112-01期末_智慧遠程居家物聯網監控系統
+//https://thingspeak.com/channels/2377926/private_show
+#define SECRET_CH_ID 2377926                    // replace 0000000 with your channel number
+#define SECRET_WRITE_APIKEY "KJAT6AD3NUZ3N68G"  // replace XYZ with your channel write API Key
+unsigned long myChannelNumber = SECRET_CH_ID;
+const char* myWriteAPIKey = SECRET_WRITE_APIKEY;
+// Initialize our values
+int number1 = 0;
+int number2 = random(0, 100);
+int number3 = random(0, 100);
+int number4 = random(0, 100);
+int number5 = random(0, 100);
+String myStatus = "";
+WiFiClient client;
+//--------------------------------------------------------------------------------
 
-待修正：
-	OLED 水位 尚未添加 正常、中、高，L M H
-		   雨滴 尚未添加 有雨、沒雨， Rain UN Rain
+void setup() {
+  digitalWrite(buzzPin, HIGH);
+  Serial.begin(115200);
+  //--------------------------------------------------------------------------------
+  //LCD
+  lcd1.init();
+  lcd1.backlight();
+  lcd1.setCursor(0, 0);
+  lcd1.print("A1121214_112a");
+  lcd1.setCursor(0, 1);
+  lcd1.print("2023/12/14 Ready");
+  //--------------------------------------------------------------------------------
+  display.begin(i2c_Address, true);
+  display.display();
+  //--------------------------------------------------------------------------------
+  //OLED
+  display.clearDisplay();              // 清除緩衝區資料
+  display.setTextSize(1);              // 設定字型大小為
+  display.setTextColor(1);  // 設定白字黑底
+  display.setCursor(0, 10);
+  display.print("A1121214_112a");
+  display.setCursor(0, 40);
+  display.print("2023/12/14 Ready");
+  display.display();  // 顯示所設定的文字
+  //--------------------------------------------------------------------------------
+  dhtSensor.setup(DHT_PIN, DHTesp::DHT22);  //DHT11
+  //--------------------------------------------------------------------------------
+  pinMode(water_sensor, INPUT);  //設置water_sensor對應的腳GPIO36為輸入
+  //--------------------------------------------------------------------------------
+  pinMode(buzzPin, OUTPUT);  //設定蜂鳴器
+  //--------------------------------------------------------------------------------
+  pinMode(rled, OUTPUT);   //設置redled對應的腳GPIO15為輸出
+  pinMode(yled, OUTPUT);   //設置yellowled對應的腳GPIO16為輸出
+  pinMode(gled, OUTPUT);   //設置greenled對應的腳GPIO17為輸出
+  pinMode(rled2, OUTPUT);  //設置redled對應的腳GPIO15為輸出
+  pinMode(yled2, OUTPUT);  //設置yellowled對應的腳GPIO16為輸出
+  pinMode(gled2, OUTPUT);  //設置greenled對應的腳GPIO17為輸出
+  //--------------------------------------------------------------------------------
+  pinMode(shockPin, INPUT);  //設定shockPin的接腳為輸入模式
+  //--------------------------------------------------------------------------------
+  pinMode(rainDI, INPUT);  //雨滴感測器
+  //pinMode(rainAI, INPUT);
+  //--------------------------------------------------------------------------------
+  ThingSpeak.begin(client);  // Initialize ThingSpeak
+  //--------------------------------------------------------------------------------
+  // 初始化並設定 NTP 時間
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  //--------------------------------------------------------------------------------
+  //WIFI
+  while (!Serial) { delay(100); }
+  // We start by connecting to a WiFi network
+  Serial.println();
+  Serial.println("******************************************************");
+  Serial.print("Connecting to ");
+  Serial.println(ssid);
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+    server.on("/", handleRoot);  //網頁建立，首頁
+    server.begin();
+  }
+  Serial.println("");
+  Serial.println("WiFi connected");
+  Serial.println("IP address: ");
+  Serial.println(WiFi.localIP());
+  server.on("/getdata", HTTP_GET, handleGetData);
+  //--------------------------------------------------------------------------------
+}
 
-1121215 測試：
-	OLED顯示不正常，問題待查。
---------------------------------------------------------------------------------------
-A1121212_DHT_water_sw420_LED_LCD_Rain_wifi_time_thing_111Ca
-1121215 修改：
-	增加 dhtSensor2 為 DHT11，腳位為25
-	增加 監控視窗 顯示DHT11 
---------------------------------------------------------------------------------------
-A1121212_DHT_water_sw420_LED_LCD_Rain_wifi_time_thing_111Ba
-1121215 修改：
-	DHT11修改為DHT22，接線也不一樣
---------------------------------------------------------------------------------------
-A1121212_DHT_water_sw420_LED_LCD_Rain_wifi_time_thing_111a
-1121212 修改：
-	增加 雨滴感應器，運作原理，有雨(訊號為0) 亮yled2 + 蜂鳴器 響 1秒，沒雨(訊號為1) 亮gled2 
-	修正 震動感應器，運作原理，有震動(訊號為1) 亮rled2 + 蜂鳴器 響 0.5秒，沒震動(訊號為0) 亮gled2 
-	監控視窗 增加顯示 雨滴資訊
-	網頁伺服器 增加顯示 雨滴資訊
-	重新設計 thingspeak ，調整為5個欄位
-待修正：
-	(預計)OLED 相容 ，待修正
---------------------------------------------------------------------------------------
-A1121211_DHT_water_sw420_LED_LCD_wifi_time_thingspeak_110 and 110a
-110 精簡 監控視窗if 程式碼
 
-修正內容如下：
+int val;  // 全域變數，用於存儲水位感測器的數值
+//byte value; // 全域變數，用於存儲震動感測器的數值
+
+void loop() {
+  TempAndHumidity data = dhtSensor.getTempAndHumidity();
+  int val = analogRead(water_sensor);  //從水位感測器 類比數值
+  value = digitalRead(shockPin);       //震動感應器 數位值
+  int raind = digitalRead(rainDI);     //雨滴感應器 數位值
+  server.handleClient();
+  water();     //水位感測器
+  shock();     //SW-420震動
+  rain();      //Rain Sensor
+  lcd();       //DHT11
+  oled();      //OLED 128*64
+  serial01();  //DHT11+水位感測器
+  ThingS();    //ThingSpeak
+  delay(100);
+}
+//--------------------------------------------------------------------------------
+void handleRoot() {
+  String response = "<html>  <head>    <meta charset=\"utf-8\"> <title>My ESP32</title> <script>\n";
+  response += "setInterval(function() {";
+  response += "  var xhttp = new XMLHttpRequest();";
+  response += "  xhttp.onreadystatechange = function() {";
+  response += "    if (this.readyState == 4 && this.status == 200) {";
+  response += "      var data = JSON.parse(this.responseText);";
+  response += "      var waterLevelElement = document.getElementById('waterLevel');";  // 宣告 waterLevelElement
+  response += "      var rainLevelElement = document.getElementById('rainLevel');";
+  //
+  response += "      var currentDate = new Date();";
+  response += "      var formattedDate = currentDate.getFullYear() + '/' + "
+              "((currentDate.getMonth() + 1) < 10 ? '0' : '') + (currentDate.getMonth() + 1) + '/' + "
+              "(currentDate.getDate() < 10 ? '0' : '') + currentDate.getDate();";
+  response += "      var formattedTime = "
+              "`${(currentDate.getHours() < 10 ? '0' : '') + currentDate.getHours()}:` + "
+              "`${(currentDate.getMinutes() < 10 ? '0' : '') + currentDate.getMinutes()}:` + "
+              "`${(currentDate.getSeconds() < 10 ? '0' : '') + currentDate.getSeconds()}`;";
+
+  response += "      document.getElementById('currentDateTime').innerHTML = '現在時間: ' + formattedDate + ' ' + formattedTime;";
+  //
+  response += "      document.getElementById('temperature').innerHTML = '溫度: ' + data.temperature + '°C';";
+  response += "      document.getElementById('humidity').innerHTML = '濕度: ' + data.humidity + '%';";
+  //response += "      document.getElementById('waterLevel').innerHTML = '水位: ' + data.waterLevel;";
+  response += "      if (data.waterLevel > 900) {";
+  response += "        waterLevelElement.innerHTML = '水位: 高 ' + data.waterLevel;";
+  response += "      } else if (data.waterLevel > 500) {";
+  response += "        waterLevelElement.innerHTML = '水位: 中 ' + data.waterLevel;";
+  response += "      } else {";
+  response += "        waterLevelElement.innerHTML = '水位: 普通 ' + data.waterLevel;";
+  response += "      }";
+  response += "      if (data.rainLevel == 0) {";
+  response += "        rainLevelElement.innerHTML = '雨滴感測：有雨 ' + data.rainLevel;";
+  response += "      } else {";
+  response += "        rainLevelElement.innerHTML = '雨滴感測: 沒雨 ' + data.rainLevel;";
+  response += "      }";
+
+  response += "      document.getElementById('vibration').innerHTML = '震動: ' + data.vibration;";
+  //response += " ";
+  response += "    }";
+  response += "  };";
+  response += "  xhttp.open('GET', '/getdata', true);";
+  response += "  xhttp.send();";
+  response += "}, 500);";  // 每x秒更新一次
+  response += "</script></head>  <body> <h4>馮士釗 4B1G0002</h4> <h4>112-01 微處理機應用實務 期末專題</h4> <br> <p id='currentDateTime'></p> <p id='temperature'>溫度: </p> <p id='humidity'>濕度: </p> <p id='waterLevel'>水位: </p> <p id='rainLevel'>雨滴: </p> <p id='vibration'>震動: </p> </body></html>";
+  server.send(200, "text/html", response);
+}
+//--------------------------------------------------------------------------------
+void handleGetData() {
   TempAndHumidity data = dhtSensor.getTempAndHumidity();
   int val = analogRead(water_sensor);  //從水位感測器讀出類比數值
-  int raind = digitalRead(rainDI); //雨滴感應器 數位值
+  value = digitalRead(shockPin);
+  int raind = digitalRead(rainDI);  //雨滴感應器 數位值
+  String jsonData = "{\"temperature\": " + String(data.temperature, 2) + ", \"humidity\": " + String(data.humidity, 1) + ", \"waterLevel\": " + String(val) + ", \"rainLevel\": " + String(raind) + ", \"vibration\": " + String(value) + "}";
+  server.send(200, "application/json", jsonData);
+}
+//--------------------------------------------------------------------------------
+void water() {
+  int val = analogRead(water_sensor);  //從水位感測器讀出類比數值
+  if (val > 900) {
+    digitalWrite(rled, HIGH);  //當水位值>2000：红色亮
+    digitalWrite(yled, LOW);
+    digitalWrite(gled, LOW);
+    digitalWrite(buzzPin, LOW);  //有源蜂鳴器響起
+    //Serial.println("水位高");
+    delay(500);
+    digitalWrite(rled, LOW);
+    digitalWrite(buzzPin, HIGH);  //有源蜂鳴器關閉
+    delay(500);
+  } else if (val > 500) {
+    digitalWrite(rled, LOW);
+    digitalWrite(yled, HIGH);  //當水位值介於2500～800：黄色亮
+    digitalWrite(gled, LOW);
+    digitalWrite(buzzPin, LOW);  //有源蜂鳴器響起
+    //Serial.println("水位中");
+    delay(1000);
+    digitalWrite(yled, LOW);
+    digitalWrite(buzzPin, HIGH);  //有源蜂鳴器關閉
+    delay(1000);
+  } else {
+    digitalWrite(rled, LOW);
+    digitalWrite(yled, LOW);
+    digitalWrite(gled, HIGH);  //當水位值小於800：綠色亮
+  }
+}
+//--------------------------------------------------------------------------------
+void shock() {
+  if (value == 1) {
+    digitalWrite(rled2, HIGH);
+    digitalWrite(gled2, LOW);
+    digitalWrite(buzzPin, LOW);  //有源蜂鳴器響起
+    delay(1000);
+    digitalWrite(rled2, LOW);
+    digitalWrite(gled2, LOW);
+    digitalWrite(buzzPin, HIGH);  //有源蜂鳴器關閉
+    delay(1000);
+  } else {
+    digitalWrite(rled2, LOW);
+    digitalWrite(gled2, HIGH);
+  }
+}
+//--------------------------------------------------------------------------------
+void rain() {
+  int raind = digitalRead(rainDI);   //雨滴感應器 數位值
+  if (digitalRead(rainDI) == LOW) {  //當感測器上有殘存的雨滴時，感測器數位輸出訊號為 0
+    digitalWrite(yled2, HIGH);
+    digitalWrite(gled2, LOW);
+    digitalWrite(buzzPin, LOW);  //有源蜂鳴器響起
+    delay(1000);
+    digitalWrite(yled2, LOW);
+    digitalWrite(gled2, LOW);
+    digitalWrite(buzzPin, HIGH);  //有源蜂鳴器關閉
+    delay(1000);
+  } else  //當感測器上面是乾燥的時候，數位輸出訊號為 1
+  {
+    digitalWrite(yled2, LOW);
+    digitalWrite(gled2, HIGH);
+  }
+}
+//--------------------------------------------------------------------------------
+void lcd() {
+  TempAndHumidity data = dhtSensor.getTempAndHumidity();
+  lcd1.setCursor(0, 0);
+  lcd1.print("Temp: " + String(data.temperature, 2) + "°C  ");
+  lcd1.setCursor(0, 1);
+  lcd1.print("Humidity: " + String(data.humidity, 1) + "% ");
+}
+//--------------------------------------------------------------------------------
+void oled() {
+  TempAndHumidity data = dhtSensor.getTempAndHumidity();
+  int val = analogRead(water_sensor);  //從水位感測器讀出類比數值
+  int raind = digitalRead(rainDI);     //雨滴感應器 數位值
+
+  display.clearDisplay();              // 清除緩衝區資料
+  display.setTextSize(1);              // 設定字型大小
+  display.setTextColor(1);  // 設定白字黑底
+
+  // 取得本地時間（NTP 時間）
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) {
+    Serial.println("Failed to obtain time");
+    return;
+  }
+  if (OLEDStatus == true) {
+    // 顯示年月日
+    display.setCursor(0, 0);
+    display.print(&timeinfo, "%Y/%m/%d");
+    display.print(" ");
+    // 顯示時間
+    display.print(&timeinfo, "%H:%M:%S");
+    display.display();  // 顯示所設定的文字
+  }
+
+  display.setCursor(0, 10);
+  display.print("Temperature: " + String(data.temperature, 2) + "C");
+  display.setCursor(0, 20);
+  display.print("Humidity: " + String(data.humidity, 1) + "%");
+  
+  if (val > 900) {
+    display.setCursor(0, 30);
+    display.print("Water: HIGH " + String(val));
+  } else if (val > 500) {
+    display.setCursor(0, 30);
+    display.print("Water: Medium " + String(val));
+  } else {
+    display.setCursor(0, 30);
+    display.print("Water: LOW " + String(val));
+  }
+  if (digitalRead(rainDI) == LOW) {  //當感測器上有殘存的雨滴時
+    Serial.println("雨滴感測： 有雨 " + String(raind));
+    display.setCursor(0, 40);
+    display.print("Raindrops: Rain " + String(raind));
+  } else {
+    display.setCursor(0, 40);
+    display.print("Raindrops: No Rain " + String(raind));
+  }
+  display.setCursor(0, 50);
+  display.print("Shake: " + String(value));
+  display.display();
+  delay(100);
+}
+//--------------------------------------------------------------------------------
+void serial01() {
+  TempAndHumidity data = dhtSensor.getTempAndHumidity();
+  int val = analogRead(water_sensor);  //從水位感測器讀出類比數值
+  int raind = digitalRead(rainDI);     //雨滴感應器 數位值
   //
   Serial.println("溫度: " + String(data.temperature, 2) + "°C");
   Serial.println("濕度: " + String(data.humidity, 1) + "%");
@@ -58,20 +364,52 @@ A1121211_DHT_water_sw420_LED_LCD_wifi_time_thingspeak_110 and 110a
   } else {
     Serial.println("水位: 正常 " + String(val));
   }
-  if(digitalRead(rainDI) == LOW) { //當感測器上有殘存的雨滴時
-    Serial.println("雨滴感測： 有雨 "+ String(raind)); 
+  if (digitalRead(rainDI) == LOW) {  //當感測器上有殘存的雨滴時
+    Serial.println("雨滴感測： 有雨 " + String(raind));
   } else {
-    Serial.println("雨滴感測： 沒雨 "+ String(raind)); 
+    Serial.println("雨滴感測： 沒雨 " + String(raind));
   }
   //
   Serial.println("震動: " + String(value));
   Serial.println("---");
---------------------------------------------------------------------------------------
-A1121206_DHT11_water_sw420_RYGLED_LCD_wifi_time_thingspeak_109a
-調整水位刻度，高>900 中>500
---------------------------------------------------------------------------------------
-A1121206_DHT11_water_sw420_RYGLED_LCD_wifi_time_thingspeak_109
-基本功能全部完成，網頁可以顯示 溫度、濕度、水位、震動
---------------------------------------------------------------------------------------
-A1121206_DHT11_water_sw420_RYGLED_LCD_wifi_thingspeak_108
-增加網頁顯示水位高、中、普通(>1400 >1100)
+}
+//--------------------------------------------------------------------------------
+void ThingS() {
+  TempAndHumidity data = dhtSensor.getTempAndHumidity();
+  int val = analogRead(water_sensor);  //從水位感測器讀出類比數值
+  value = digitalRead(shockPin);
+  int raind = digitalRead(rainDI);  //雨滴感應器 數位值
+  ThingSpeak.setField(1, String(data.temperature, 2));
+  ThingSpeak.setField(2, String(data.humidity, 1));
+  ThingSpeak.setField(3, String(val));
+  ThingSpeak.setField(4, String(value));
+  ThingSpeak.setField(5, String(raind));
+  if (number1 > number2) {
+    myStatus = String("field1 is greater than field2");
+  } else if (number1 < number2) {
+    myStatus = String("field1 is less than field2");
+  } else {
+    myStatus = String("field1 equals field2");
+  }
+
+  // set the status
+  ThingSpeak.setStatus(myStatus);
+
+  // write to the ThingSpeak channel
+  int x = ThingSpeak.writeFields(myChannelNumber, myWriteAPIKey);
+  if (x == 200) {
+    Serial.println("Channel update successful.");
+  } else {
+    Serial.println("Problem updating channel. HTTP error code " + String(x));
+  }
+
+  // change the values
+  number1++;
+  if (number1 > 99) {
+    number1 = 0;
+  }
+  number2 = random(0, 100);
+  number3 = random(0, 100);
+  number4 = random(0, 100);
+  number5 = random(0, 100);
+}
