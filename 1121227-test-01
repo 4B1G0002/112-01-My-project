@@ -1,0 +1,131 @@
+//1121227 建檔，有dht22、土壤濕度、oled、Relay
+//
+#include "DHTesp.h"
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include "ThingSpeak.h"
+//--------------------------------------------------------------------------------
+#include <WebServer.h>
+#include <WiFiClient.h>
+#include <WiFi.h>
+const char* ssid = "DDAP";           // Change this to your WiFi SSID
+const char* password = "2023esp32";  // Change this to your WiFi password
+WebServer server(80);
+//--------------------------------------------------------------------------------
+const int DHT_PIN = 23;
+//--------------------------------------------------------------------------------
+int soilAI = 34;
+//滿水位， 2/3，1/3
+//--------------------------------------------------------------------------------
+int rled = 0;
+int yled = 4;
+int gled = 16;
+int realy01 = 13;
+//--------------------------------------------------------------------------------
+DHTesp dhtSensor;
+Adafruit_SSD1306 display(128, 64, &Wire, -1);
+//--------------------------------------------------------------------------------
+#define SECRET_CH_ID 2355420            //thingspeak ID
+#define SECRET_WRITE_APIKEY "SSR0CH5643IGZVB0"
+unsigned long myChannelNumber = SECRET_CH_ID;
+const char* myWriteAPIKey = SECRET_WRITE_APIKEY;
+// Initialize our values
+int number1 = 0;
+int number2 = random(0, 100);
+int number3 = random(0, 100);
+String myStatus = "";
+WiFiClient client;
+//--------------------------------------------------------------------------------
+
+void setup() {
+  Serial.begin(115200);
+  if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3c)) {
+    Serial.println(F("SSD1306 allocation failed"));
+    for(;;); // Don't proceed, loop forever
+  }
+  //--------------------------------------------------------------------------------
+  dhtSensor.setup(DHT_PIN, DHTesp::DHT22);
+  //--------------------------------------------------------------------------------
+  pinMode(rled, OUTPUT);
+  pinMode(yled, OUTPUT);
+  pinMode(gled, OUTPUT);   
+  pinMode(realy01,OUTPUT);
+  //--------------------------------------------------------------------------------
+  pinMode(soilAI, INPUT);
+  //--------------------------------------------------------------------------------
+  ThingSpeak.begin(client);  // Initialize ThingSpeak
+  //--------------------------------------------------------------------------------
+  digitalWrite(realy01,LOW);
+}
+
+void loop() {
+  TempAndHumidity data = dhtSensor.getTempAndHumidity();
+  int soildata = analogRead(soilAI);
+  Serial.println("Temp: " + String(data.temperature, 2) + "°C");
+  Serial.println("Humidity: " + String(data.humidity, 1) + "%");
+  if (soildata < 2300) {
+    Serial.println("土壤濕度: 正常 " + String(soildata));
+    digitalWrite(rled, LOW);
+    digitalWrite(gled, HIGH);
+    digitalWrite(realy01,LOW);
+  } else {
+    Serial.println("土壤濕度: 缺水 " + String(soildata));
+    digitalWrite(rled, HIGH);
+    digitalWrite(gled, LOW);
+    digitalWrite(realy01,HIGH);
+  }
+  Serial.println("---");
+  //--------------------------------------------------------------------------------
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextSize(1);
+
+  display.setCursor(0, 10);
+  display.print("Temperature: " + String(data.temperature, 2) + "C");
+  display.setCursor(0, 30);
+  display.print("Humidity: " + String(data.humidity, 1) + "%");
+  
+  if (soildata < 2300) {
+    display.setCursor(0, 50);
+    display.print("Soil: OK " + String(soildata));
+  } else {
+    display.setCursor(0, 50);
+    display.print("Soil: Warn " + String(soildata));
+  }
+
+  display.display();
+  //--------------------------------------------------------------------------------
+  ThingSpeak.setField(1, String(data.temperature, 2));
+  ThingSpeak.setField(2, String(data.humidity, 1));
+  ThingSpeak.setField(3, String(soildata));
+
+  if (number1 > number2) {
+    myStatus = String("field1 is greater than field2");
+  } else if (number1 < number2) {
+    myStatus = String("field1 is less than field2");
+  } else {
+    myStatus = String("field1 equals field2");
+  }
+
+  // set the status
+  ThingSpeak.setStatus(myStatus);
+
+  // write to the ThingSpeak channel
+  int x = ThingSpeak.writeFields(myChannelNumber, myWriteAPIKey);
+  if (x == 200) {
+    Serial.println("Channel update successful.");
+  } else {
+    Serial.println("Problem updating channel. HTTP error code " + String(x));
+  }
+
+  // change the values
+  number1++;
+  if (number1 > 99) {
+    number1 = 0;
+  }
+  number2 = random(0, 100);
+  number3 = random(0, 100);
+  //--------------------------------------------------------------------------------
+  delay(1000);
+}
